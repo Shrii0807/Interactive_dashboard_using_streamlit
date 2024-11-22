@@ -1,87 +1,127 @@
 import streamlit as st
 import plotly.express as px
 import pandas as pd
+import os
 import warnings
-from io import StringIO
 
-warnings.filterwarnings("ignore")
+# Suppress warnings
+warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Superstore!!!", page_icon=":bar_chart:", layout="wide")
+# Streamlit Page Configuration
+st.set_page_config(page_title="Superstore Analysis", page_icon=":bar_chart:", layout="wide")
 
+# Title and Styling
 st.title(":bar_chart: Sample Superstore EDA")
 st.markdown('<style>div.block-container{padding-top:2.5rem;}</style>', unsafe_allow_html=True)
 
-# File upload section
+# File Uploader
 fl = st.file_uploader(":file_folder: Upload a file", type=['csv', 'txt', 'xlsx', 'xls'])
 
-# Load data
-if fl is not None:
-    try:
-        if fl.name.endswith('.csv') or fl.name.endswith('.txt'):
+try:
+    if fl is not None:
+        filename = fl.name
+        st.write(f"Uploaded file: `{filename}`")
+        if filename.endswith('.csv') or filename.endswith('.txt'):
             df = pd.read_csv(fl, encoding="ISO-8859-1")
-        elif fl.name.endswith('.xlsx') or fl.name.endswith('.xls'):
+        else:
             df = pd.read_excel(fl)
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        st.stop()
-else:
-    st.warning("Please upload a file to proceed.")
-    st.stop()
+    else:
+        # Default file if no file is uploaded
+        default_path = os.path.join(os.getcwd(), "Superstore.csv")
+        st.info("Using default dataset: `Superstore.csv`")
+        df = pd.read_csv(default_path, encoding="utf-8")
 
-# Check for necessary columns
-required_columns = {"Order Date", "Region", "State", "City", "Sales", "Profit", "Category"}
-if not required_columns.issubset(set(df.columns)):
-    st.error("The uploaded file does not contain all the required columns.")
-    st.stop()
+    # Convert Order Date to datetime
+    df["Order Date"] = pd.to_datetime(df["Order Date"], errors='coerce')
 
-# Convert date column
-df["Order Date"] = pd.to_datetime(df["Order Date"], errors='coerce')
+    # Handle missing or invalid date entries
+    if df["Order Date"].isnull().any():
+        st.warning("Some rows have invalid dates. These rows will be excluded.")
+        df = df.dropna(subset=["Order Date"])
 
-# Date Range Selection
-col1, col2 = st.columns((2,))
-StartDate = df["Order Date"].min()
-EndDate = df["Order Date"].max()
+    # Get date range for filtering
+    StartDate = df["Order Date"].min()
+    EndDate = df["Order Date"].max()
 
-with col1:
-    date1 = st.date_input("Start Date", StartDate)
+    # Date Range Selection
+    col1, col2 = st.columns(2)
+    with col1:
+        date1 = pd.to_datetime(st.date_input("Start Date", StartDate))
+    with col2:
+        date2 = pd.to_datetime(st.date_input("End Date", EndDate))
 
-with col2:
-    date2 = st.date_input("End Date", EndDate)
+    # Filter by date range
+    df = df[(df["Order Date"] >= date1) & (df["Order Date"] <= date2)].copy()
 
-# Filter based on dates
-df = df[(df["Order Date"] >= pd.to_datetime(date1)) & (df["Order Date"] <= pd.to_datetime(date2))]
+    # Sidebar Filters
+    st.sidebar.header("Choose Your Filters")
+    region = st.sidebar.multiselect("Pick your Region", df["Region"].unique())
+    state = st.sidebar.multiselect("Pick the State", df["State"].unique())
+    city = st.sidebar.multiselect("Pick the City", df["City"].unique())
 
-# Sidebar Filters
-st.sidebar.header("Choose your filters:")
-region = st.sidebar.multiselect("Pick your Region", options=df["Region"].unique(), default=df["Region"].unique())
-state = st.sidebar.multiselect("Pick your State", options=df[df["Region"].isin(region)]["State"].unique())
-city = st.sidebar.multiselect("Pick your City", options=df[df["State"].isin(state)]["City"].unique())
+    # Apply Filters
+    filtered_df = df.copy()
+    if region:
+        filtered_df = filtered_df[filtered_df["Region"].isin(region)]
+    if state:
+        filtered_df = filtered_df[filtered_df["State"].isin(state)]
+    if city:
+        filtered_df = filtered_df[filtered_df["City"].isin(city)]
 
-# Apply filters
-filtered_df = df[
-    (df["Region"].isin(region)) &
-    (df["State"].isin(state) if state else True) &
-    (df["City"].isin(city) if city else True)
-]
+    # Sales by Category
+    category_df = filtered_df.groupby("Category", as_index=False)["Sales"].sum()
 
-# Visualizations
-st.subheader("Category wise Sales")
-category_df = filtered_df.groupby("Category", as_index=False)["Sales"].sum()
-fig1 = px.bar(category_df, x="Category", y="Sales", text=category_df["Sales"], template="seaborn")
-st.plotly_chart(fig1, use_container_width=True)
+    # Visualization Columns
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Category-wise Sales")
+        fig = px.bar(category_df, x="Category", y="Sales",
+                     text=category_df["Sales"].apply(lambda x: f"${x:,.2f}"),
+                     template="seaborn")
+        st.plotly_chart(fig, use_container_width=True)
 
-st.subheader("Region wise Sales")
-fig2 = px.pie(filtered_df, values="Sales", names="Region", hole=0.5, template="plotly_white")
-st.plotly_chart(fig2, use_container_width=True)
+    with col2:
+        st.subheader("Region-wise Sales")
+        fig = px.pie(filtered_df, values="Sales", names="Region", hole=0.5)
+        st.plotly_chart(fig, use_container_width=True)
 
-# Time Series Analysis
-filtered_df["month_year"] = filtered_df["Order Date"].dt.to_period("M")
-time_series = filtered_df.groupby(filtered_df["month_year"].dt.strftime("%Y-%m"))["Sales"].sum().reset_index()
-st.subheader("Time Series Analysis")
-fig3 = px.line(time_series, x="month_year", y="Sales", template="plotly_dark")
-st.plotly_chart(fig3, use_container_width=True)
+    # Time Series Analysis
+    st.subheader("Time Series Analysis")
+    filtered_df["Month-Year"] = filtered_df["Order Date"].dt.to_period("M")
+    linechart = (filtered_df.groupby(filtered_df["Month-Year"].dt.strftime("%Y-%b"))["Sales"]
+                 .sum()
+                 .reset_index())
+    fig2 = px.line(linechart, x="Month-Year", y="Sales", labels={"Sales": "Amount"}, template="plotly_white")
+    st.plotly_chart(fig2, use_container_width=True)
 
-# Download Button
-st.subheader("Download Filtered Data")
-csv = filtered_df.to_csv(index=False).encode('utf-8')
-st.download_button(label="Download Data", data=csv, file_name="filtered_data.csv", mime="text/csv")
+    # Hierarchical TreeMap
+    st.subheader("Hierarchical View of Sales")
+    fig3 = px.treemap(filtered_df, path=["Region", "Category", "Sub-Category"],
+                      values="Sales", color="Sub-Category")
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # Segment and Category Pie Charts
+    chart1, chart2 = st.columns(2)
+    with chart1:
+        st.subheader("Segment-wise Sales")
+        fig = px.pie(filtered_df, values="Sales", names="Segment", template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with chart2:
+        st.subheader("Category-wise Sales")
+        fig = px.pie(filtered_df, values="Sales", names="Category", template="seaborn")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Scatter Plot
+    st.subheader("Scatter Plot: Sales vs. Profit")
+    fig = px.scatter(filtered_df, x="Sales", y="Profit", size="Quantity",
+                     title="Relationship between Sales and Profit")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Download Options
+    st.subheader("Download Processed Data")
+    csv = filtered_df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download Data", data=csv, file_name="FilteredData.csv", mime="text/csv")
+
+except Exception as e:
+    st.error(f"An error occurred: {e}")
